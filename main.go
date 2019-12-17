@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 
+	"runtime"
+
 	"github.com/paulmach/orb"
 	"github.com/paulmach/orb/encoding/mvt"
 	"github.com/paulmach/orb/maptile"
@@ -55,6 +57,10 @@ func (c layerCounts) Less(i, j int) bool {
 
 func (c layerCounts) Swap(i, j int) {
 	c[i], c[j] = c[j], c[i]
+}
+
+func init() {
+	runtime.GOMAXPROCS(runtime.NumCPU())
 }
 
 func main() {
@@ -158,11 +164,11 @@ func getTileInfo(u string, ch chan tileInfo) {
 	if err != nil {
 		panic(err)
 	}
+	defer resp.Body.Close()
 	data, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		panic(err)
 	}
-	defer resp.Body.Close()
 	layers, err := mvt.Unmarshal(data)
 	if err != nil {
 		panic(err)
