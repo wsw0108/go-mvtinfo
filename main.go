@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -15,6 +16,8 @@ import (
 
 	"runtime"
 
+	"compress/gzip"
+
 	"github.com/paulmach/orb"
 	"github.com/paulmach/orb/encoding/mvt"
 	"github.com/paulmach/orb/maptile"
@@ -26,6 +29,7 @@ var (
 	latitude  float64
 	zoom      int
 	offset    int
+	noGzip    bool
 )
 
 type layerInfo struct {
@@ -37,7 +41,6 @@ type tileInfo struct {
 	X        int
 	Y        int
 	Size     uint64
-	SizeZ    uint64
 	Features uint64
 	Layers   []layerInfo
 }
@@ -78,6 +81,7 @@ func main() {
 	flag.Float64Var(&latitude, "lat", 31.0, "latitude in degree")
 	flag.IntVar(&zoom, "zoom", 6, "basic zoom")
 	flag.IntVar(&offset, "offset", 2, "zoom offset")
+	flag.BoolVar(&noGzip, "no-gzip", false, "do not use 'Accept-Encoding: gzip'")
 	flag.Parse()
 
 	tile := maptile.At(orb.Point{longitude, latitude}, maptile.Zoom(zoom))
@@ -207,7 +211,14 @@ func getTileInfo(z, x, y int, ch chan tileInfo) {
 	u = strings.Replace(u, "{z}", strconv.Itoa(z), -1)
 	u = strings.Replace(u, "{x}", strconv.Itoa(x), -1)
 	u = strings.Replace(u, "{y}", strconv.Itoa(y), -1)
-	resp, err := http.Get(u)
+	req, err := http.NewRequest("GET", u, nil)
+	if err != nil {
+		panic(err)
+	}
+	if !noGzip {
+		req.Header.Add("Accept-Encoding", "gzip")
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		panic(err)
 	}
@@ -215,6 +226,18 @@ func getTileInfo(z, x, y int, ch chan tileInfo) {
 	data, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		panic(err)
+	}
+	size := len(data)
+	ce := resp.Header.Get("Content-Encoding")
+	if strings.Contains(ce, "gzip") && !noGzip {
+		r, err := gzip.NewReader(bytes.NewReader(data))
+		if err != nil {
+			panic(err)
+		}
+		data, err = ioutil.ReadAll(r)
+		if err != nil {
+			panic(err)
+		}
 	}
 	layers, err := mvt.Unmarshal(data)
 	if err != nil {
@@ -233,7 +256,7 @@ func getTileInfo(z, x, y int, ch chan tileInfo) {
 	info := tileInfo{
 		X:        x,
 		Y:        y,
-		Size:     uint64(len(data)),
+		Size:     uint64(size),
 		Features: features,
 		Layers:   layerInfos,
 	}
