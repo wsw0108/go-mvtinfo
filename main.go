@@ -6,10 +6,12 @@ import (
 	"io/ioutil"
 	"math"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"text/tabwriter"
 
 	"runtime"
 
@@ -32,9 +34,10 @@ type layerInfo struct {
 }
 
 type tileInfo struct {
-	Size   uint64
-	SizeZ  uint64
-	Layers []layerInfo
+	Size     uint64
+	SizeZ    uint64
+	Features uint64
+	Layers   []layerInfo
 }
 
 type layerCount struct {
@@ -84,6 +87,9 @@ func main() {
 			minTileSize   uint64 = math.MaxUint64
 			maxTileSize   uint64 = 0
 			totalTileSize uint64
+			minFeatures   uint64 = math.MaxUint64
+			maxFeatures   uint64 = 0
+			totalFeatures uint64
 		)
 		layer2CountMap := make(map[string]*layerCount)
 		for info := range ch {
@@ -94,6 +100,13 @@ func main() {
 				maxTileSize = info.Size
 			}
 			totalTileSize += info.Size
+			if info.Features < minFeatures {
+				minFeatures = info.Features
+			}
+			if info.Features > maxFeatures {
+				maxFeatures = info.Features
+			}
+			totalFeatures += info.Features
 			for _, linfo := range info.Layers {
 				if count, ok := layer2CountMap[linfo.Name]; !ok {
 					layer2CountMap[linfo.Name] = &layerCount{
@@ -115,10 +128,15 @@ func main() {
 			}
 		}
 		avgTileSize := float64(totalTileSize) / float64(tileCount)
-		fmt.Printf("Zoom=%d\n", z)
-		fmt.Printf("Tile(count=%d):\n", tileCount)
-		fmt.Println("MinSize\tMaxSize\tAvgSize")
-		fmt.Printf("%d\t%d\t%.2f\n", minTileSize, maxTileSize, avgTileSize)
+		avgFeatures := float64(totalFeatures) / float64(tileCount)
+		fmt.Printf("Tile(zoom=%d, count=%d):\n", z, tileCount)
+		w := new(tabwriter.Writer)
+		w.Init(os.Stdout, 0, 0, 1, ' ', 0)
+		fmt.Fprintln(w, "  MinSize\tMaxSize\tAvgSize")
+		fmt.Fprintf(w, "  %d\t%d\t%.2f\n", minTileSize, maxTileSize, avgTileSize)
+		fmt.Fprintln(w, "  MinFeatures\tMaxFeatures\tAvgFeatures")
+		fmt.Fprintf(w, "  %d\t%d\t%.2f\n", minFeatures, maxFeatures, avgFeatures)
+		w.Flush()
 		var counts layerCounts
 		for layer, count := range layer2CountMap {
 			counts = append(counts, layerCount{
@@ -131,11 +149,12 @@ func main() {
 		}
 		sort.Sort(counts)
 		fmt.Printf("Layers(count=%d):\n", len(counts))
-		fmt.Println(" MinCount\tMaxCount\tAvgCount\tLayer")
+		fmt.Fprintln(w, "  Layer\tCover\tMinCount\tMaxCount\tAvgCount")
 		for _, count := range counts {
 			avg := float64(count.total) / float64(count.tile)
-			fmt.Printf(" %d\t\t%d\t\t%.2f\t\t%s(cross=%d)\n", count.min, count.max, avg, count.layer, count.tile)
+			fmt.Fprintf(w, "  %s\t%d\t%d\t%d\t%.2f\n", count.layer, count.tile, count.min, count.max, avg)
 		}
+		w.Flush()
 		done <- struct{}{}
 	}()
 
@@ -173,16 +192,20 @@ func getTileInfo(u string, ch chan tileInfo) {
 	if err != nil {
 		panic(err)
 	}
+	var features uint64
 	var layerInfos []layerInfo
 	for _, layer := range layers {
+		count := len(layer.Features)
+		features += uint64(count)
 		layerInfos = append(layerInfos, layerInfo{
 			Name:  layer.Name,
-			Count: uint64(len(layer.Features)),
+			Count: uint64(count),
 		})
 	}
 	info := tileInfo{
-		Size:   uint64(len(data)),
-		Layers: layerInfos,
+		Size:     uint64(len(data)),
+		Features: features,
+		Layers:   layerInfos,
 	}
 	ch <- info
 }
