@@ -34,6 +34,8 @@ type layerInfo struct {
 }
 
 type tileInfo struct {
+	X        int
+	Y        int
 	Size     uint64
 	SizeZ    uint64
 	Features uint64
@@ -41,11 +43,15 @@ type tileInfo struct {
 }
 
 type layerCount struct {
-	layer string
-	min   uint64
-	max   uint64
-	total uint64
-	tile  int
+	layer  string
+	min    uint64
+	minAtX int
+	minAtY int
+	max    uint64
+	maxAtX int
+	maxAtY int
+	total  uint64
+	tile   int
 }
 
 type layerCounts []layerCount
@@ -91,36 +97,62 @@ func main() {
 			maxFeatures   uint64 = 0
 			totalFeatures uint64
 		)
+		var (
+			minTileSizeAtX int
+			minTileSizeAtY int
+			maxTileSizeAtX int
+			maxTileSizeAtY int
+			minFeaturesAtX int
+			minFeaturesAtY int
+			maxFeaturesAtX int
+			maxFeaturesAtY int
+		)
 		layer2CountMap := make(map[string]*layerCount)
 		for info := range ch {
 			if info.Size < minTileSize {
 				minTileSize = info.Size
+				minTileSizeAtX = info.X
+				minTileSizeAtY = info.Y
 			}
 			if info.Size > maxTileSize {
 				maxTileSize = info.Size
+				maxTileSizeAtX = info.X
+				maxTileSizeAtY = info.Y
 			}
 			totalTileSize += info.Size
 			if info.Features < minFeatures {
 				minFeatures = info.Features
+				minFeaturesAtX = info.X
+				minFeaturesAtY = info.Y
 			}
 			if info.Features > maxFeatures {
 				maxFeatures = info.Features
+				maxFeaturesAtX = info.X
+				maxFeaturesAtY = info.Y
 			}
 			totalFeatures += info.Features
 			for _, linfo := range info.Layers {
 				if count, ok := layer2CountMap[linfo.Name]; !ok {
 					layer2CountMap[linfo.Name] = &layerCount{
-						min:   linfo.Count,
-						max:   linfo.Count,
-						total: linfo.Count,
-						tile:  1,
+						min:    linfo.Count,
+						minAtX: info.X,
+						minAtY: info.Y,
+						max:    linfo.Count,
+						maxAtX: info.X,
+						maxAtY: info.Y,
+						total:  linfo.Count,
+						tile:   1,
 					}
 				} else {
 					if linfo.Count < count.min {
 						count.min = linfo.Count
+						count.minAtX = info.X
+						count.minAtY = info.Y
 					}
 					if linfo.Count > count.max {
 						count.max = linfo.Count
+						count.maxAtX = info.X
+						count.maxAtY = info.Y
 					}
 					count.total += linfo.Count
 					count.tile += 1
@@ -131,28 +163,24 @@ func main() {
 		avgFeatures := float64(totalFeatures) / float64(tileCount)
 		fmt.Printf("Tile(zoom=%d, count=%d):\n", z, tileCount)
 		w := new(tabwriter.Writer)
-		w.Init(os.Stdout, 0, 0, 1, ' ', 0)
-		fmt.Fprintln(w, "  MinSize\tMaxSize\tAvgSize")
-		fmt.Fprintf(w, "  %d\t%d\t%.2f\n", minTileSize, maxTileSize, avgTileSize)
-		fmt.Fprintln(w, "  MinFeatures\tMaxFeatures\tAvgFeatures")
-		fmt.Fprintf(w, "  %d\t%d\t%.2f\n", minFeatures, maxFeatures, avgFeatures)
+		w.Init(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "  MinSize\tMinSizeAt\tMaxSize\tMaxSizeAt\tAvgSize")
+		fmt.Fprintf(w, "  %d\t(%d,%d)\t%d\t(%d,%d)\t%.2f\n", minTileSize, minTileSizeAtX, minTileSizeAtY, maxTileSize, maxTileSizeAtX, maxTileSizeAtY, avgTileSize)
+		fmt.Fprintln(w, "  MinFeatures\tMinFeaturesAt\tMaxFeatures\tMaxFeaturesAt\tAvgFeatures")
+		fmt.Fprintf(w, "  %d\t(%d,%d)\t%d\t(%d,%d)\t%.2f\n", minFeatures, minFeaturesAtX, minFeaturesAtY, maxFeatures, maxFeaturesAtX, maxFeaturesAtY, avgFeatures)
 		w.Flush()
 		var counts layerCounts
 		for layer, count := range layer2CountMap {
-			counts = append(counts, layerCount{
-				layer: layer,
-				min:   count.min,
-				max:   count.max,
-				total: count.total,
-				tile:  count.tile,
-			})
+			c := *count
+			c.layer = layer
+			counts = append(counts, c)
 		}
 		sort.Sort(counts)
 		fmt.Printf("Layers(count=%d):\n", len(counts))
-		fmt.Fprintln(w, "  Layer\tCover\tMinCount\tMaxCount\tAvgCount")
+		fmt.Fprintln(w, "  Layer\tCover\tMinCount\tMinCountAt\tMaxCount\tMaxCountAt\tAvgCount")
 		for _, count := range counts {
 			avg := float64(count.total) / float64(count.tile)
-			fmt.Fprintf(w, "  %s\t%d\t%d\t%d\t%.2f\n", count.layer, count.tile, count.min, count.max, avg)
+			fmt.Fprintf(w, "  %s\t%d\t%d\t(%d,%d)\t%d\t(%d,%d)\t%.2f\n", count.layer, count.tile, count.min, count.minAtX, count.minAtY, count.max, count.maxAtX, count.maxAtY, avg)
 		}
 		w.Flush()
 		done <- struct{}{}
@@ -164,11 +192,7 @@ func main() {
 		for y := min.Y; y <= max.Y; y++ {
 			go func(z, x, y int) {
 				defer wg.Done()
-				u := url
-				u = strings.Replace(u, "{z}", strconv.Itoa(z), -1)
-				u = strings.Replace(u, "{x}", strconv.Itoa(x), -1)
-				u = strings.Replace(u, "{y}", strconv.Itoa(y), -1)
-				getTileInfo(u, ch)
+				getTileInfo(z, x, y, ch)
 			}(int(z), int(x), int(y))
 		}
 	}
@@ -178,7 +202,11 @@ func main() {
 	<-done
 }
 
-func getTileInfo(u string, ch chan tileInfo) {
+func getTileInfo(z, x, y int, ch chan tileInfo) {
+	u := url
+	u = strings.Replace(u, "{z}", strconv.Itoa(z), -1)
+	u = strings.Replace(u, "{x}", strconv.Itoa(x), -1)
+	u = strings.Replace(u, "{y}", strconv.Itoa(y), -1)
 	resp, err := http.Get(u)
 	if err != nil {
 		panic(err)
@@ -203,6 +231,8 @@ func getTileInfo(u string, ch chan tileInfo) {
 		})
 	}
 	info := tileInfo{
+		X:        x,
+		Y:        y,
 		Size:     uint64(len(data)),
 		Features: features,
 		Layers:   layerInfos,
